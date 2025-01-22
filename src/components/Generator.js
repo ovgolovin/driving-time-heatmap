@@ -86,43 +86,51 @@ export default class Generator extends Component {
 
   query(points, acc) {
     if (!points.length) {
-      return this.setState({ 
-        points: this.state.points.map((p, i) => Object.assign({}, p, { duration: acc[i] }))
+      return this.setState({
+        points: this.state.points.map((p, i) =>
+          Object.assign({}, p, { duration: acc[i] })
+        ),
       });
     }
+  
     const quantityPerCall = 24;
     const pointsFormatted = points
-    .slice(0, quantityPerCall)
-    .map(point => [point.lat, point.lon].join(','));
-    return request
-    .get('https://cors.harrisonliddiard.com/https://maps.googleapis.com/maps/api/distancematrix/json')
-    .query({
-      units: 'imperial',
-      origins: [this.state.origin.lat, this.state.origin.lng].join(','),
-      destinations: pointsFormatted.join('|'),
-      key: this.state.apiKey,
-      [this.state.timeType]: this.state.datetime ? Math.floor((new Date(this.state.datetime)).getTime() / 1000) : undefined
-    })
-    .then(res => {
-      if (res.body.status === 'OVER_QUERY_LIMIT') {
-        return alert('Someone’s been generating a lot of maps!\n\nUnfortunately, you’ve exceeded your daily request limit for the Google Maps service that powers the driving time map generation.\n\nPlease try again in around 24 hours. :(');
+      .slice(0, quantityPerCall)
+      .map(point => ({ lat: point.lat, lng: point.lon }));
+  
+    const service = new google.maps.DistanceMatrixService();
+    service.getDistanceMatrix(
+      {
+        origins: [{ lat: this.state.origin.lat, lng: this.state.origin.lng }],
+        destinations: pointsFormatted,
+        travelMode: google.maps.TravelMode.DRIVING,
+        unitSystem: google.maps.UnitSystem.IMPERIAL,
+        drivingOptions: {
+          departureTime: this.state.datetime
+            ? new Date(this.state.datetime)
+            : new Date(),
+          trafficModel: 'bestguess',
+        },
+      },
+      (response, status) => {
+        if (status === google.maps.DistanceMatrixStatus.OVER_QUERY_LIMIT) {
+          alert(
+            "Someone’s been generating a lot of maps!\n\nUnfortunately, you’ve exceeded your daily request limit for the Google Maps service that powers the driving time map generation.\n\nPlease try again in around 24 hours. :("
+          );
+        } else if (status !== google.maps.DistanceMatrixStatus.OK) {
+          console.error(response);
+          throw new Error('Malformed API response.');
+        } else {
+          const durations = response.rows[0].elements;
+          const newAcc = durations.map(d => {
+            if (d.duration_in_traffic) return d.duration_in_traffic.value;
+            else if (d.duration) return d.duration.value;
+            else return Infinity; // no route to destination
+          });
+          this.query(points.slice(quantityPerCall), acc.concat(newAcc));
+        }
       }
-      else if (!res.body.rows.length || !res.body.rows[0].elements) {
-        console.error(res.body);
-        throw new Error('Malformed API response.');
-      }
-      const durations = res.body.rows[0].elements;
-      const newAcc = durations
-      .map(d => {
-        if (d.duration_in_traffic)
-          return d.duration_in_traffic.value;
-        else if (d.duration)
-          return d.duration.value;
-        else // no route to destination point
-          return Infinity;
-      });
-      return this.query(points.slice(quantityPerCall), acc.concat(newAcc));
-    });
+    );
   }
 
   getTravelTimes() {
